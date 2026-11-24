@@ -26,7 +26,10 @@ const pool = databaseUrl ? new pg.Pool({ connectionString: databaseUrl, max: 2, 
 if (pool) {
   await pool.query("CREATE TABLE IF NOT EXISTS prototype_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
   const stored = await pool.query("SELECT snapshot FROM prototype_state WHERE id = 1");
-  if (stored.rows.length) writeFileSync(databasePath, stored.rows[0].snapshot, { mode: 0o600 });
+  if (stored.rows.length) {
+    writeFileSync(databasePath, stored.rows[0].snapshot, { mode: 0o600 });
+    console.log("[persistence] restored database snapshot");
+  } else console.log("[persistence] initializing a new database");
 }
 const db = new DatabaseSync(databasePath);
 db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
