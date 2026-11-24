@@ -1,0 +1,127 @@
+[
+  [
+    "organizations",
+    "telephony_provider",
+    "TEXT NOT NULL DEFAULT 'twilio'"
+  ],
+  [
+    "organizations",
+    "telnyx_api_key",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "telnyx_from_number",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "telnyx_connection_id",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "telnyx_messaging_profile_id",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "openai_realtime_model",
+    "TEXT DEFAULT 'gpt-4o-realtime-preview'"
+  ],
+  [
+    "organizations",
+    "stt_provider",
+    "TEXT NOT NULL DEFAULT 'openai'"
+  ],
+  [
+    "organizations",
+    "tts_provider",
+    "TEXT NOT NULL DEFAULT 'openai'"
+  ],
+  [
+    "voice_agents",
+    "telephony_provider",
+    "TEXT"
+  ],
+  [
+    "voice_agents",
+    "llm_provider",
+    "TEXT NOT NULL DEFAULT 'openai'"
+  ],
+  [
+    "voice_agents",
+    "llm_model",
+    "TEXT"
+  ],
+  [
+    "voice_agents",
+    "openai_api_key",
+    "TEXT"
+  ],
+  [
+    "voice_agents",
+    "stt_provider",
+    "TEXT"
+  ],
+  [
+    "voice_agents",
+    "tts_provider",
+    "TEXT"
+  ],
+  [
+    "voice_agents",
+    "temperature",
+    "REAL NOT NULL DEFAULT 0.4"
+  ],
+  [
+    "organizations",
+    "llm_provider",
+    "TEXT NOT NULL DEFAULT 'openai'"
+  ],
+  [
+    "organizations",
+    "anthropic_model",
+    "TEXT DEFAULT 'claude-sonnet-5-5'"
+  ],
+  [
+    "organizations",
+    "tts_voice",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "tts_model",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "stt_model",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "voice_language",
+    "TEXT DEFAULT 'en'"
+  ],
+  [
+    "organizations",
+    "dograh_synced_at",
+    "TEXT"
+  ],
+  [
+    "organizations",
+    "dograh_sync_error",
+    "TEXT"
+  ],
+  [
+    "voice_agents",
+    "tts_model",
+    "TEXT"
+  ],
+  [
+    "voice_agents",
+    "stt_model",
+    "TEXT"
+  ]
+]
