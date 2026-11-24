@@ -22,7 +22,7 @@ mkdirSync(dataDir, { recursive: true });
 const databasePath = path.join(dataDir, "crm.sqlite");
 const databaseUrl = process.env.DATABASE_URL;
 if (process.env.NODE_ENV === "production" && !databaseUrl) throw new Error("DATABASE_URL is required to keep prototype data across restarts");
-const pool = databaseUrl ? new pg.Pool({ connectionString: databaseUrl, max: 2 }) : null;
+const pool = databaseUrl ? new pg.Pool({ connectionString: databaseUrl, max: 2, connectionTimeoutMillis: 15000, query_timeout: 30000 }) : null;
 if (pool) {
   await pool.query("CREATE TABLE IF NOT EXISTS prototype_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
   const stored = await pool.query("SELECT snapshot FROM prototype_state WHERE id = 1");
