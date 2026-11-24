@@ -52,6 +52,23 @@ if (!db.prepare("SELECT id FROM users LIMIT 1").get()) {
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
+// The public demo account is isolated from the private owner workspace.
+const DEMO_ORG_ID = "org_public_demo";
+const DEMO_EMAIL = "owner@demo.test";
+const existingDemo = db.prepare("SELECT org_id FROM users WHERE email = ?").get(DEMO_EMAIL);
+if (existingDemo && existingDemo.org_id !== DEMO_ORG_ID) throw new Error("Demo email already belongs to another workspace");
+if (!existingDemo) {
+  const now = new Date().toISOString();
+  const demoHash = await bcrypt.hash("demo1234", 12);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("INSERT OR IGNORE INTO organizations (id,name,timezone,simulation_mode,created_at) VALUES (?,?,?,?,?)").run(DEMO_ORG_ID,"Adaptive Labs Demo","Asia/Kolkata",1,now);
+    db.prepare("INSERT INTO users (id,org_id,email,name,password_hash,role,active,created_at) VALUES (?,?,?,?,?,?,?,?)").run("usr_public_demo",DEMO_ORG_ID,DEMO_EMAIL,"Demo Owner",demoHash,"owner",1,now);
+    db.prepare("INSERT INTO voice_agents (id,org_id,name,kind,description,greeting,system_prompt,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run("va_public_demo",DEMO_ORG_ID,"Demo Assistant","lead_qualifier","A sample assistant for exploring the app.","Hello! How can I help you today?","You are a friendly demo assistant.","draft","usr_public_demo",now,now);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
 // Older local demo databases predate mobile refresh tokens. This additive
 // migration is the same storage shape the main CRM server expects.
 db.exec(`
@@ -1025,7 +1042,7 @@ createServer(async (req, res) => {
     const route = url.pathname.replace(/^\/api\/v1/, "");
     if (!url.pathname.startsWith("/api/v1/")) return json(res, 404, { error: "Not found" });
     if (req.method === "GET" && route === "/meta") {
-      return json(res, 200, { name: "Adaptive Labs", version: "1", demo: false, demo_users: [] });
+      return json(res, 200, { name: "Adaptive Labs", version: "1", demo: true, demo_users: [{ email: DEMO_EMAIL, name: "Demo Owner", role: "owner" }] });
     }
     if (req.method === "POST" && route === "/auth/login") {
       const input = await body(req);
@@ -1057,6 +1074,7 @@ createServer(async (req, res) => {
         return json(res, 200, providerSettings(one("SELECT * FROM organizations WHERE id=?", user.org_id)));
       }
       if (req.method === "PATCH") {
+        if (user.org_id === DEMO_ORG_ID) return json(res, 403, { error: "Provider settings are unavailable in the shared demo. Use your private account for API keys." });
         const input = await body(req);
         const allowed = new Set([
           "dograh_base_url", "dograh_api_key", "openai_api_key", "twilio_account_sid",
@@ -1277,6 +1295,7 @@ createServer(async (req, res) => {
     if (req.method === "POST" && route === "/agents") {
       requireAgentWrite(user);
       const input = await body(req);
+      if (user.org_id === DEMO_ORG_ID && input.openai_api_key) return json(res, 403, { error: "Do not add API keys to the shared demo." });
       const name = String(input.name || "").trim();
       if (!name) return json(res, 400, { error: "Agent name is required" });
       const org = one("SELECT * FROM organizations WHERE id=?", user.org_id);
@@ -1363,15 +1382,17 @@ createServer(async (req, res) => {
     if (req.method === "PATCH" && match) {
       requireAgentWrite(user);
       const input = await body(req);
+      if (user.org_id === DEMO_ORG_ID && input.openai_api_key) return json(res, 403, { error: "Do not add API keys to the shared demo." });
       const patch = Object.entries(input).filter(([key]) => AGENT_FIELDS.includes(key));
       // The key is only replaced by a real new value, or cleared on purpose.
       const key = incomingAgentKey(input.openai_api_key, input.clear_openai_api_key === true);
       if (key !== undefined) patch.push(["openai_api_key", key]);
       if (!patch.length) return json(res, 400, { error: "Nothing to update" });
-      run(`UPDATE voice_agents SET ${patch.map(([k]) => `${k}=?`).join(", ")}, updated_at=? WHERE id=? AND org_id=?`,
+      const result = run(`UPDATE voice_agents SET ${patch.map(([k]) => `${k}=?`).join(", ")}, updated_at=? WHERE id=? AND org_id=?`,
         ...patch.map(([k, v]) => (k === "extraction" ? JSON.stringify(v) : v)), new Date().toISOString(), match[1], user.org_id);
+      if (!result.changes) return json(res, 404, { error: "Agent not found" });
       audit(user, "agent.update", "voice_agent", match[1]);
-      return json(res, 200, { agent: agent(one("SELECT * FROM voice_agents WHERE id=?", match[1])) });
+      return json(res, 200, { agent: agent(one("SELECT * FROM voice_agents WHERE id=? AND org_id=?", match[1], user.org_id)) });
     }
     if (req.method === "DELETE" && match) {
       requireAgentWrite(user);
