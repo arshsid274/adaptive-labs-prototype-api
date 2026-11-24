@@ -6,11 +6,12 @@
  * servers don't share secrets.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { createServer } from "node:http";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, backup } from "node:sqlite";
+import pg from "pg";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 
@@ -18,7 +19,16 @@ const port = Number(process.env.PORT || 3001);
 const dataDir = process.env.CRM_DATA_DIR || path.join(process.cwd(), ".data");
 if (process.env.NODE_ENV === "production" && (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32 || !process.env.SECRETS_KEY)) throw new Error("Production AUTH_SECRET (32+ chars) and SECRETS_KEY are required");
 mkdirSync(dataDir, { recursive: true });
-const db = new DatabaseSync(path.join(dataDir, "crm.sqlite"));
+const databasePath = path.join(dataDir, "crm.sqlite");
+const databaseUrl = process.env.DATABASE_URL;
+if (process.env.NODE_ENV === "production" && !databaseUrl) throw new Error("DATABASE_URL is required to keep prototype data across restarts");
+const pool = databaseUrl ? new pg.Pool({ connectionString: databaseUrl, max: 2 }) : null;
+if (pool) {
+  await pool.query("CREATE TABLE IF NOT EXISTS prototype_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  const stored = await pool.query("SELECT snapshot FROM prototype_state WHERE id = 1");
+  if (stored.rows.length) writeFileSync(databasePath, stored.rows[0].snapshot, { mode: 0o600 });
+}
+const db = new DatabaseSync(databasePath);
 db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
 for (const [table, column, ddl] of JSON.parse(readFileSync(new URL("./migrations.json", import.meta.url), "utf8"))) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
@@ -70,6 +80,27 @@ for (const column of ["tts_model", "stt_model"]) {
     db.exec(`ALTER TABLE voice_agents ADD COLUMN ${column} TEXT`);
   }
 }
+// Serialize snapshots so a successful write is acknowledged only after the
+// fresh SQLite image has been committed to the external Postgres database.
+let persistedChanges = -1;
+let snapshotQueue = Promise.resolve();
+function persistDatabase() {
+  if (!pool) return Promise.resolve();
+  const pending = snapshotQueue.catch(() => {}).then(async () => {
+    const before = Number(db.prepare("SELECT total_changes() AS count").get().count);
+    if (before === persistedChanges) return;
+    const temp = path.join(dataDir, `snapshot-${randomBytes(8).toString("hex")}.sqlite`);
+    try {
+      await backup(db, temp);
+      const bytes = readFileSync(temp);
+      await pool.query("INSERT INTO prototype_state (id, snapshot, updated_at) VALUES (1, $1, NOW()) ON CONFLICT (id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW()", [bytes]);
+      persistedChanges = before;
+    } finally { try { unlinkSync(temp); } catch {} }
+  });
+  snapshotQueue = pending;
+  return pending;
+}
+await persistDatabase();
 const secret = new TextEncoder().encode(process.env.AUTH_SECRET || "dev-only-insecure-secret-change-me-32bytes");
 const json = (res, status, value) => {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -970,6 +1001,22 @@ async function body(req) {
 }
 
 createServer(async (req, res) => {
+  const originalEnd = res.end.bind(res);
+  let ending = false;
+  res.end = function (...args) {
+    if (ending) return res;
+    ending = true;
+    if (!pool) return originalEnd(...args);
+    void persistDatabase().then(() => originalEnd(...args)).catch((error) => {
+      console.error("[persistence] snapshot failed", error.message);
+      if (!res.headersSent) {
+        res.statusCode = 503;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        originalEnd(JSON.stringify({ error: "Storage unavailable; please retry" }));
+      } else originalEnd();
+    });
+    return res;
+  };
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const route = url.pathname.replace(/^\/api\/v1/, "");
